@@ -1,0 +1,155 @@
+local player = game.Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- ===== Evitar múltiples ejecuciones =====
+local existing = playerGui:FindFirstChild("UndertaleUI")
+if existing then
+	existing:Destroy()
+end
+
+-- ===== UI =====
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "UndertaleUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+-- Fondo negro
+local bg = Instance.new("Frame")
+bg.Size = UDim2.new(1, 0, 1, 0)
+bg.BackgroundColor3 = Color3.new(0, 0, 0)
+bg.BackgroundTransparency = 1
+bg.Visible = false
+bg.Parent = screenGui
+
+-- Texto principal
+local textLabel = Instance.new("TextLabel")
+textLabel.Size = UDim2.new(1, 0, 1, 0)
+textLabel.BackgroundTransparency = 1
+textLabel.TextScaled = true
+textLabel.Font = Enum.Font.Arcade
+textLabel.Parent = bg
+
+-- HUD de vida
+local healthLabel = Instance.new("TextLabel")
+healthLabel.Size = UDim2.new(0, 200, 0, 50)
+healthLabel.Position = UDim2.new(0, 20, 1, -60)
+healthLabel.BackgroundTransparency = 1
+healthLabel.TextScaled = true
+healthLabel.Font = Enum.Font.Arcade
+healthLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+healthLabel.Text = "HP: 100"
+healthLabel.Parent = screenGui
+
+-- ===== TEXTOS =====
+local function showText(text, color, duration)
+	bg.Visible = true
+	bg.BackgroundTransparency = 0
+	textLabel.Text = text
+	textLabel.TextColor3 = color
+	task.wait(duration)
+	bg.Visible = false
+end
+
+-- ===== LÓGICA =====
+local function onCharacter(character)
+	local humanoid = character:WaitForChild("Humanoid")
+
+	-- 🔥 FIX: actualizar HUD al respawn
+	task.defer(function()
+		healthLabel.Text = "HP: " .. math.floor(humanoid.Health)
+	end)
+
+	local attempts = 0
+	local maxAttempts = 10
+	local debounce = false
+	local finalMode = false
+	local internalChange = false
+	local alive = true
+
+	local connections = {}
+
+	local function cleanup()
+		alive = false
+		for _, c in ipairs(connections) do
+			if c and c.Disconnect then
+				c:Disconnect()
+			end
+		end
+		table.clear(connections)
+	end
+
+	-- HUD en tiempo real
+	table.insert(connections, humanoid.HealthChanged:Connect(function()
+		healthLabel.Text = "HP: " .. math.floor(humanoid.Health)
+	end))
+
+	-- Lógica principal
+	table.insert(connections, humanoid.HealthChanged:Connect(function(health)
+		if not alive then return end
+		if internalChange then return end
+		if finalMode then return end
+
+		if health <= humanoid.MaxHealth * 0.05 and attempts < maxAttempts and not debounce then
+			debounce = true
+			attempts += 1
+
+			print("Intento #" .. attempts)
+
+			if attempts == 1 then
+				task.spawn(function()
+					showText("YOU DIED", Color3.fromRGB(255,255,255), 3)
+					showText("BUT YOU REFUSED TO THAT", Color3.fromRGB(255,0,0), 2)
+				end)
+			end
+
+			internalChange = true
+
+			-- ===== ÚLTIMA VIDA =====
+			if attempts == maxAttempts then
+				finalMode = true
+
+				task.spawn(function()
+					showText("LAST CHANCE", Color3.fromRGB(255,0,0), 2)
+				end)
+
+				humanoid.Health = humanoid.MaxHealth
+
+				task.spawn(function()
+					local drain = humanoid.MaxHealth / 100
+					while alive and humanoid.Health > 0 do
+						task.wait(1)
+						if not alive then break end
+						internalChange = true
+						humanoid.Health = humanoid.Health - drain
+						internalChange = false
+					end
+				end)
+
+			else
+				-- ===== REVIVE NORMAL =====
+				local targetHealth = humanoid.MaxHealth * 0.01
+				humanoid.Health = targetHealth
+
+				for i = 1, 5 do
+					task.wait(0.1)
+					humanoid.Health = targetHealth
+				end
+			end
+
+			internalChange = false
+			task.wait(0.1)
+			debounce = false
+		end
+	end))
+
+	-- Al morir de verdad
+	table.insert(connections, humanoid.Died:Connect(function()
+		print("Murió realmente, reiniciando sistema")
+		cleanup()
+	end))
+end
+
+player.CharacterAdded:Connect(onCharacter)
+if player.Character then
+	onCharacter(player.Character)
+end
