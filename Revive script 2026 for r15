@@ -53,6 +53,7 @@ end
 -- ===== LÓGICA =====
 local function onCharacter(character)
 	local humanoid = character:WaitForChild("Humanoid")
+	local rootPart = character:WaitForChild("HumanoidRootPart")
 
 	-- 🔥 FIX: actualizar HUD al respawn
 	task.defer(function()
@@ -66,6 +67,14 @@ local function onCharacter(character)
 	local internalChange = false
 	local alive = true
 
+	-- 🛡️ Control de regeneración
+	local regenerating = false
+
+	-- 🪂 Control de caída
+	local falling = false
+	local fallStartHeight = 0
+	local fallProtectionDebounce = false
+
 	local connections = {}
 
 	local function cleanup()
@@ -78,6 +87,124 @@ local function onCharacter(character)
 		table.clear(connections)
 	end
 
+	-- 📍 TELETRANSPORTE DIAGONAL
+	local function teleportDiagonal()
+		if not rootPart or not rootPart.Parent then
+			return
+		end
+
+		-- 10 studs hacia atrás + 10 hacia la derecha
+		local backward = -rootPart.CFrame.LookVector * 10
+		local right = rootPart.CFrame.RightVector * 10
+
+		-- Desplazamiento diagonal
+		character:PivotTo(character:GetPivot() + backward + right)
+	end
+
+	-- ❤️ RECUPERACIÓN PROGRESIVA DE VIDA
+	local function gradualRecovery()
+		if regenerating or not alive or finalMode then
+			return
+		end
+
+		regenerating = true
+
+		-- Comenzamos desde 1 HP
+		internalChange = true
+		humanoid.Health = 1
+		internalChange = false
+
+		-- Recuperación de 1 en 1
+		while alive
+			and humanoid.Parent
+			and humanoid.Health > 0
+			and humanoid.Health < humanoid.MaxHealth
+			and not finalMode do
+
+			task.wait(0.1)
+
+			if not alive or finalMode then
+				break
+			end
+
+			internalChange = true
+
+			local nextHealth = math.min(
+				humanoid.Health + 1,
+				humanoid.MaxHealth
+			)
+
+			humanoid.Health = nextHealth
+
+			internalChange = false
+		end
+
+		regenerating = false
+	end
+
+	-- 🪂 RAYCAST DE DETECCIÓN DE CAÍDAS
+	local RunService = game:GetService("RunService")
+
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	raycastParams.FilterDescendantsInstances = {character}
+
+	local function detectFall()
+		if not alive or not rootPart.Parent then
+			return
+		end
+
+		local velocityY = rootPart.AssemblyLinearVelocity.Y
+		local humanoidState = humanoid:GetState()
+
+		-- Detectar el inicio de una caída
+		if velocityY < -50 and not falling then
+			falling = true
+			fallStartHeight = rootPart.Position.Y
+		end
+
+		if not falling then
+			return
+		end
+
+		-- Raycast hacia abajo
+		local rayOrigin = rootPart.Position
+		local rayDirection = Vector3.new(0, -6, 0)
+
+		local result = workspace:Raycast(
+			rayOrigin,
+			rayDirection,
+			raycastParams
+		)
+
+		-- Detectar aterrizaje
+		if result and humanoidState ~= Enum.HumanoidStateType.Freefall then
+			falling = false
+
+			local fallDistance = fallStartHeight - rootPart.Position.Y
+
+			-- Solo activar ante caídas considerables
+			if fallDistance >= 15
+				and humanoid.Health > 0
+				and not fallProtectionDebounce
+				and not finalMode then
+
+				fallProtectionDebounce = true
+
+				-- Activar el sistema existente
+				if humanoid.Health > humanoid.MaxHealth * 0.05 then
+					humanoid.Health = humanoid.MaxHealth * 0.05
+				end
+
+				task.delay(1, function()
+					fallProtectionDebounce = false
+				end)
+			end
+		end
+	end
+
+	table.insert(connections, RunService.Heartbeat:Connect(detectFall))
+
 	-- HUD en tiempo real
 	table.insert(connections, humanoid.HealthChanged:Connect(function()
 		healthLabel.Text = "HP: " .. math.floor(humanoid.Health)
@@ -88,12 +215,19 @@ local function onCharacter(character)
 		if not alive then return end
 		if internalChange then return end
 		if finalMode then return end
+		if regenerating then return end
 
-		if health <= humanoid.MaxHealth * 0.05 and attempts < maxAttempts and not debounce then
+		if health <= humanoid.MaxHealth * 0.05
+			and attempts < maxAttempts
+			and not debounce then
+
 			debounce = true
 			attempts += 1
 
 			print("Intento #" .. attempts)
+
+			-- 📍 Teletransporte diagonal
+			teleportDiagonal()
 
 			if attempts == 1 then
 				task.spawn(function()
@@ -116,24 +250,25 @@ local function onCharacter(character)
 
 				task.spawn(function()
 					local drain = humanoid.MaxHealth / 100
+
 					while alive and humanoid.Health > 0 do
 						task.wait(1)
+
 						if not alive then break end
+
 						internalChange = true
-						humanoid.Health = humanoid.Health - drain
+						humanoid.Health = math.max(
+							0,
+							humanoid.Health - drain
+						)
 						internalChange = false
 					end
 				end)
 
 			else
 				-- ===== REVIVE NORMAL =====
-				local targetHealth = humanoid.MaxHealth * 0.01
-				humanoid.Health = targetHealth
-
-				for i = 1, 5 do
-					task.wait(0.1)
-					humanoid.Health = targetHealth
-				end
+				internalChange = false
+				task.spawn(gradualRecovery)
 			end
 
 			internalChange = false
@@ -150,6 +285,7 @@ local function onCharacter(character)
 end
 
 player.CharacterAdded:Connect(onCharacter)
+
 if player.Character then
 	onCharacter(player.Character)
 end
